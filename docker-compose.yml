@@ -6,7 +6,7 @@ services:
       - "8000:8000"
     environment:
       STORE_INTEL_DB: /data/store_intelligence.db
-      POS_CSV: /app/data/sample/pos_transactions.csv
+      POS_CSV_PATH: /app/data/pos_transactions_docker.csv
     volumes:
       - store_intel_data:/data
       - ./data:/app/data

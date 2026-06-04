@@ -1,90 +1,92 @@
-# DESIGN.md — Store Intelligence System
+# DESIGN.md — Store Intelligence Architecture & Decisions
 
-## System Overview
-The Apex Retail Store Intelligence System is an end-to-end pipeline designed to bridge the data blind spot in physical retail stores. It processes raw CCTV footage from retail outlets, translates movement into structured business events, and exposes real-time intelligence via a REST API.
+This document details the architectural design, core state tracking algorithms, layout spatial calibrations, and AI-assisted engineering decisions made during the development of the Apex Retail Store Intelligence System.
 
 ---
 
 ## 1. System Architecture
 
-The codebase is split into three decoupled components:
-
-1. **Detection & Tracking Pipeline (`pipeline/`):**
-   * **Object Detection:** Detects persons on a frame-by-frame basis using YOLOv8n.
-   * **Tracker:** Maintains shopper trajectories across frames using ByteTrack.
-   * **Staff Filter:** Performs real-time HSV-space uniform filtering on detected shopper crops.
-   * **State Machine:** Processes detections to generate retail events (e.g. entry, zone transitions, queue joins, dwell alerts, exits).
-   
-2. **API & Metric Server (`app/`):**
-   * **FastAPI Backend:** Handles events ingestion (`/ingest`) and provides clean analytical endpoints for business metrics, conversion funnels, occupancy heatmaps, and rule-based anomaly detection.
-   * **SQLite Database:** Stores incoming events, parsed session lifetimes, and imported point-of-sale (POS) records under WAL mode for high concurrency.
-
-3. **Terminal Dashboard (`pipeline/dashboard.py`):**
-   * A terminal UI displaying live metrics fetched from the FastAPI endpoints.
+The codebase follows a decoupled, event-driven architecture designed to separate heavy computer vision state-tracking from high-throughput analytical query processing:
 
 ```
-                  ┌──────────────────────┐
-                  │   Raw CCTV Videos    │
-                  └──────────┬───────────┘
+                      ┌──────────────────────┐
+                      │   Raw CCTV Videos    │
+                      └──────────┬───────────┘
+                                 │
+                                 ▼ (Inference on CPU)
+                  ┌──────────────────────────────┐
+                  │   YOLOv8 + ByteTrack (ML)    │
+                  └──────────┬───────────────────┘
                              │
-                             ▼
-              ┌──────────────────────────────┐
-              │   YOLOv8 + ByteTrack (ML)    │
-              └──────────┬───────────────────┘
-                         │
-                         ▼
-              ┌──────────────────────────────┐
-              │   Retail State Machine       │
-              └──────────┬───────────────────┘
-                         │
-                         ▼
-        ┌──────────────────────────────────┐
-        │ Ingest Client -> REST API Server │
-        └────────────────┬─────────────────┘
-                         │
-                         ▼
-              ┌──────────────────────────────┐
-              │     SQLite WAL Database      │
-              └──────────────────────────────┘
+                             ▼ (Centroid Footpoints)
+                  ┌──────────────────────────────┐
+                  │    Retail State Machine      │
+                  └──────────┬───────────────────┘
+                             │
+                             ▼ (HTTP POST JSON events)
+            ┌──────────────────────────────────┐
+            │  Ingestion API (FastAPI Router)  │
+            └────────────────┬─────────────────┘
+                             │
+                             ▼ (Write-Ahead Log)
+                  ┌──────────────────────────────┐
+                  │     SQLite WAL Database      │
+                  └──────────────────────────────┘
 ```
 
----
-
-## 2. Store Layout Calibration
-
-The store physical architecture is defined in [real_store_layout.json](data/real_store_layout.json). Rather than logical categories, layout definitions correspond to physical shelf coordinates:
-
-* **Department Zones (`zone_id`):** Represent major shelf clusters (e.g., `SKINCARE`, `MAKEUP`, `HAIRCARE`).
-* **Brand Subzones (`sku_zone`):** Define segments dedicated to specific brands (e.g., `COSRX`, `Lakme`, `Maybelline`).
-* **Centroid Point-in-Polygon Mapping:** The state machine uses a ray-casting point-in-polygon algorithm to map a visitor’s bottom-most bounding box coordinate (footpoint) to the corresponding physical shelf layout area.
+The system is split into three core modules:
+1. **ML Detection & Tracking Pipeline (`pipeline/`):** Processes video frames, tracks persons using YOLOv8-Nano + ByteTrack, filters out store staff uniforms using HSV torso crop distance, maps foot centroids to layout polygons, and resolves diagonal threshold crossings. It runs a state machine to emit events like `ENTRY`, `EXIT`, `ZONE_ENTER`, `ZONE_EXIT`, `ZONE_DWELL`, and `BILLING_QUEUE_JOIN`.
+2. **FastAPI Analytics Backend (`app/`):** Validates incoming events via Pydantic, deduplicates using unique `event_id` keys, persists records in SQLite, maps transaction products to layout zones during query-time, and exposes metrics, heatmap, funnel, and anomalies endpoints.
+3. **Live Terminal UI (`pipeline/dashboard.py`):** Periodically polls FastAPI REST endpoints and renders real-time occupancy statistics, conversion rates, and queue indicators inside a console window.
 
 ---
 
-## 3. Core State Logic & Edge Cases
+## 2. Store Layout Spatial Calibration
 
-### A. Entrance Line Crossing
-* **Diagonal Threshold Support:** Due to angled CCTV camera viewpoints (such as `STORE1_CAM3_ENTRY`), traditional horizontal midline thresholds lead to premature triggers. We support arbitrary diagonal line segments ($y = mx + c$) to trace the physical door threshold.
-* **Directional Orientation:** A configurable `entry_line_side` operator determines whether an entry is classified as `"above"` or `"below"` the diagonal line.
-* **Line Confirmation:** An entry or exit event is only emitted when a visitor's footpoint is tracked on the designated side for a consecutive number of confirmation frames (default: 3).
+Physical retail shelves are calibrated using 2D image-coordinate polygons in `data/real_store_layout.json`. 
+* **Zone Definitions:**
+  * **Departments (`zone_id`):** Cover major zones such as `SKINCARE`, `HAIRCARE`, and `MAKEUP`.
+  * **Brand Bays (`sku_zone`):** Define smaller brand-specific polygons (e.g., `Good Vibes`, `Minimalist`, `Lakme`) nested within department boundaries.
+* **Coordinate Mapping:** A shopper's position is mapped using their **footpoint centroid** (bottom-middle of the bounding box: $x_{foot} = (x_1 + x_2)/2, y_{foot} = y_2$). A ray-casting point-in-polygon algorithm determines which department and brand-bay coordinates contain the shopper's feet, preventing spatial bleeding caused by simple bounding box center calculations.
 
-### B. Group Entry Splitting
-When a group of 2–4 people enter the doorway simultaneously, they are often tracked by YOLO as a single wide bounding box.
-* The state machine checks if a track's bounding box is inside the `ENTRY` zone and has an abnormally wide aspect ratio ($>0.85$).
-* It dynamically splits the bounding box into $N$ individual vertical slices, assigning virtual sub-track IDs to accurately register the correct visitor count.
+---
 
-### C. Staff Filtering
-* Rather than tracking staff as normal shoppers (which deflates conversion metrics), a dedicated HSV uniform classifier evaluates the color histogram of the visitor's torso.
-* Store 1 staff (dark blue/black) and Store 2 staff (pink) are filtered out automatically at the pipeline layer, and their events are flagged as `is_staff = 1` in the database.
+## 3. Core State Tracking & Edge Case Logic
+
+### A. Diagonal Threshold Crossing (`ENTRY` & `EXIT`)
+CCTV entry cameras (e.g. `STORE1_CAM3_ENTRY`) view the doorway from an angle, making traditional horizontal line thresholds inaccurate.
+* **Equation Calibration:** We define door boundaries using diagonal line segments ($y = mx + c$).
+* **Line Debouncing:** A crossing is detected when a visitor's coordinate changes sign relative to the line ($y - (mx + c)$). To prevent boundary oscillation (the ping-pong effect), an entry or exit is only emitted if the coordinates remain on the crossed side for 3 consecutive frames.
+
+### B. Torso HSV Staff Filtering
+Store staff walk through all zones regularly, distorting customer conversion metrics. 
+* **Torso Crop:** The pipeline crops the upper-middle region of each detected bounding box.
+* **HSV Histogram Distance:** Instead of complex models, we measure the Euclidean distance in HSV color space against calibrated uniform profiles (dark blue/black for Store 1, pink for Store 2). Matches are flagged as `is_staff = 1` and excluded from API metrics.
+
+### C. Bounding Box Group Splitting
+When groups of shoppers enter together, YOLO frequently groups them into a single wide bounding box, causing undercounting.
+* **Aspect-Ratio Trigger:** If a bounding box is inside an entry zone and has an abnormally wide aspect ratio ($\text{Width} / \text{Height} > 0.85$), the state machine triggers group splitting.
+* **Dynamic Slicing:** It divides the wide box into $N$ individual vertical strips, registering virtual visitor IDs and generating distinct entry events to preserve footfall accuracy.
 
 ### D. Spatio-Temporal Re-ID & Frame Freezes
-* Shoppers transition between different cameras (e.g., Entry -> Zone -> Billing). The state machine computes cosine similarity on visual appearance embeddings.
-* If a frame freezes or drops and the shopper suddenly appears at the billing counter under a different track, a high visual similarity score (>0.90) overrides standard travel time limits to stitch the tracks into a single visitor session.
+If a camera frame drops or freezes, a visitor might disappear and reappear at the billing counter with a different track ID.
+* **Appearance Embeddings:** The tracker extracts visual color histogram descriptors.
+* **Freeze Bypass:** If a shopper reappears within a short window, a high cosine similarity score ($>0.90$) overrides travel time rules and merges the tracks into a single `visitor_id` session, avoiding double-counting in the funnel.
 
 ---
 
-## 4. API Schemas & Data Model
+## 4. AI-Assisted Decisions
 
-* **`/ingest`:** Bulk ingests behavioural events, ignoring duplicates and logging validation errors.
-* **`/stores/{store_id}/metrics`:** Calculates key performance indicators (KPIs) like footfall, conversion rate (correlated with POS data within a 5-minute billing window), average dwell time, and billing queue depth.
-* **`/stores/{store_id}/funnel`:** Aggregates visitor counts progressing from `ENTRY` -> `ZONE_ENTER` -> `BILLING_QUEUE_JOIN` -> `PAYMENT`.
-* **`/stores/{store_id}/anomalies`:** Evaluates rule-based alerts including crowd spikes, long customer dwell times, rapid store exit groups, and queue congestion.
+During system design, we interacted with LLMs to evaluate trade-offs. Below are the key places where we critiques and altered AI-suggested designs:
+
+### Decision 1: Shopper Group Splitting
+* **What AI Suggested:** The AI proposed using a deep-learning posture estimation model (e.g., MediaPipe Pose or YOLOv8-pose) to detect individual heads or skeletal keypoints to split crowded groups in the entry threshold.
+* **Our Override:** We overrode this advice. Running keypoint models inside a CPU-only docker container would grind inference speed to a crawl. Instead, we implemented a rule-based aspect-ratio bounding box slice heuristic ($\text{W}/\text{H} > 0.85$ splits the box vertically by a multiplier of $H \times 0.45$). This is extremely fast, uses zero extra memory, and successfully splits side-by-side entries.
+
+### Decision 2: Spatial Calibration Decoupling
+* **What AI Suggested:** The AI recommended hardcoding logical catalog maps (e.g., brand-to-category associations) inside the CV tracking script to output category labels directly.
+* **Our Agreement:** We agreed with the AI's warning that product inventory layouts change often. We decoupled this: the pipeline only emits spatial coordinate labels (`sku_zone` as the brand bay). The API database maps transactions and categories dynamically during SQL queries by joining POS logs with spatial tracking events.
+
+### Decision 3: Event Ingestion Queue
+* **What AI Suggested:** The AI strongly recommended implementing a heavy message broker (like RabbitMQ or Redis Streams) to buffer incoming events from `/events/ingest` before database writes.
+* **Our Override:** We overrode the AI. A candidate submission must boot instantly with zero external dependencies. Adding RabbitMQ increases configuration overhead. Instead, we configured the SQLite database in **Write-Ahead Logging (WAL)** mode with `journal_mode=WAL` and `synchronous=NORMAL`. This allows high-concurrency ingestion and thread-safe batch writes directly through FastAPI, satisfying performance requirements with zero setup footprint.

@@ -1,117 +1,79 @@
 # Store Intelligence API + CCTV Event Pipeline
 
-This repository is a unified, self-contained solution for the retail CCTV challenge. It consolidates the CV/ML detection pipeline and the production-ready FastAPI backend service into a single repository.
+This repository contains a unified, self-contained solution for the retail CCTV challenge. It couples an ML-based CV tracking pipeline with a production-ready FastAPI backend and a live terminal dashboard to measure real-time store metrics.
 
-Raw CCTV video clips are processed into structured behavioral events, which are ingested into the consolidated backend API. Live metrics, Heatmaps, Funnels, and Anomalies can be retrieved via REST endpoints or viewed on the terminal dashboard.
+The system's "North Star" is the **Offline Store Conversion Rate** (Total Purchases ÷ Total Unique Visitors).
+
+---
+
+## Core Features
+* **CCTV Event Pipeline:** Processes raw video clips using YOLOv8 + ByteTrack. Resolves diagonal entrance thresholds, filters staff uniforms in HSV space, splits side-by-side shopper groups, and handles frame freezes using appearance embeddings.
+* **Ingestion Backend:** High-concurrency FastAPI service persisting events to a structured SQLite database running in WAL mode.
+* **POS Matcher:** Correlates spatial SKU-zone visits with transactional POS CSV records within a +/- 5-minute checkout window, aligning IST to UTC automatically.
+* **Terminal Live Dashboard:** An interactive live terminal UI plotting live metrics, conversion rates, heatmaps, and anomalies.
 
 ---
 
 ## 5-Command Setup
 
+Verify the system on your machine using these 5 commands:
+
 ```bash
-# 1. Start the unified API and Database in Docker
+# 1. Build and boot the FastAPI backend + SQLite database in Docker
 docker compose up --build -d
 
-# 2. Run the pipeline model layer on the Store 1 / Store 2 videos
-python -m pipeline.detect --layout data/real_store_layout.json --manifest data/video_manifest.json --api-url "http://localhost:8000" --out data/real_events.jsonl --detector auto
+# 2. Align POS transaction dates and map store IDs to match video timelines
+docker compose run --rm api python scripts/align_pos.py
 
-# 3. Optional: Run a simulated/mock pipeline execution
-python -m pipeline.detect --simulate --layout data/sample/store_layout.json --api-url "http://localhost:8000" --out data/generated_events.jsonl
+# 3. Run the tracking pipeline on the target CCTV clips (limited to 1500 frames)
+docker compose run --rm api python -m pipeline.detect --layout data/real_store_layout.json --manifest data/video_manifest_docker.json --api-url "http://api:8000" --out data/real_events.jsonl --detector auto --max-frames 1500
 
-# 4. Query live metrics with optional temporal filtering
-curl "http://localhost:8000/stores/STORE_BLR_002/metrics?start=2026-03-03T00:00:00Z&end=2026-03-04T00:00:00Z"
+# 4. Run end-to-end POS conversion verification (simulates a queue join in the 5-minute transaction window)
+docker compose run --rm api python scripts/test_pos_matching.py
 
-# 5. Open the live terminal dashboard
-python -m pipeline.dashboard --api-url http://localhost:8000 --store-id STORE_BLR_002
+# 5. Open the real-time terminal dashboard
+docker compose run --rm api python -m pipeline.dashboard --api-url http://api:8000 --store-id STORE_1
 ```
 
 ---
 
-## Consolidated System Architecture
+## System Configuration & Testing
 
-The project is structured into two main layers integrated into one repository:
+### Environment Variables
+The backend service maps the following environment variables:
+* `STORE_INTEL_DB`: Path to persistent SQLite database (default: `/data/store_intelligence.db`).
+* `POS_CSV_PATH`: Path to aligned POS CSV transactions (default: `/app/data/pos_transactions_docker.csv`).
 
-### 1. Ingestion & Analytics Backend (`./app`)
-The production-ready FastAPI service resides in `./app` and persists events and POS data to a SQLite database. It consists of:
-- `main.py`: REST routes for event ingestion (`/ingest`) and store-level analytics.
-- `metrics.py`: Computes conversion rate, abandonment rate, unique visitors, and average dwell time per zone with support for time-based filtering.
-- `anomalies.py`: Flags conversion rate drops (against a 7-day conversion baseline), dead zones (inactive zones relative to active windows), and checkout queue depth spikes.
-- `pos_loader.py`: Daily batch ingestion script matching transacted brands to visitors' SKU zone visits.
-- `schema.sql` & `db.py`: Database connection pool, indexes, and schema definitions.
-
-### 2. Detection & Re-ID Pipeline (`./pipeline`)
-The tracking system maps bounding box coordinates to physical store locations:
-- `detect.py`: Directs inference (using YOLOv8 + ByteTrack or fallback motion detection) and converts tracking vectors into challenge-compliant events.
-- `tracker.py`: State machine tracking visitor entries/exits, zone transitions, queue joins/abandons, and Re-ID matching.
-- `reid.py`: Multi-region appearance histogram extractor matching cross-camera visitors.
-- `layout.py`: Calibrates spatial polygons (zones and `sku_subzones` for brand mapping) from image coordinates.
-- `emit.py`: Buffers and posts events to `/ingest`.
+### Data Manifest Mapping
+* Video files must be mounted under `/workspace/Original` (configured via volumes in `docker-compose.yml`).
+* The manifest `data/video_manifest_docker.json` defines container-resolved paths:
+  * `STORE_1` Main Floor: `/workspace/Original/Store 1-20260602T101818Z-3-001ec38db8/Store 1/CAM 2 - zone.mp4`
+  * `STORE_2` Entry 2: `/workspace/Original/Store 2-20260602T101819Z-3-001099f208/Store 2/entry 2.mp4`
+  * `STORE_2` Billing: `/workspace/Original/Store 2-20260602T101819Z-3-001099f208/Store 2/billing_area.mp4`
 
 ---
 
-## API Endpoints
+## REST API Reference
 
-All endpoints support optional `start` and `end` query parameters (ISO-8601 UTC format) for temporal analytics.
+All analytical endpoints support start/end ISO-8601 query parameters for custom time-window filtering.
 
-| Method | Endpoint | Purpose |
+| Method | Endpoint | Description |
 |---|---|---|
-| POST | `/ingest` | Batch ingest events, validate schemas, deduplicate by `event_id`, and record visitor sessions. |
-| GET | `/stores/{store_id}/metrics` | Retrieve unique visitors, conversion rate, latest queue depth, and average dwell time. |
-| GET | `/stores/{store_id}/funnel` | Retrieve Entry → Zone Visit → Billing Queue → Purchase funnel stages and drop-offs. |
-| GET | `/stores/{store_id}/heatmap` | Retrieve zones list with visits count, dwell times, and normalized 0-100 scores. |
-| GET | `/stores/{store_id}/anomalies` | Retrieve baseline-calibrated anomaly alerts for the active window. |
-| GET | `/health` | Verify database health status. |
+| `POST` | `/events/ingest` | Bulk ingest JSON events. Validates schemas, ignores duplicates, and updates visitor session timelines. |
+| `GET` | `/stores/{id}/metrics` | Returns unique visitors (excluding staff), average zone dwell times, conversion rates (POS matched), latest queue depth, and abandonment rate. |
+| `GET` | `/stores/{id}/funnel` | Returns Entry → Zone → Billing Queue → Purchase session funnel conversion drops. |
+| `GET` | `/stores/{id}/heatmap` | Aggregates visits count, average dwells, and normalized scores. Returns `data_confidence = false` if sessions < 20. |
+| `GET` | `/stores/{id}/anomalies` | Returns active alarms: conversion drops, queue congestion spikes, and dead zones (inactive zones for 30+ mins). |
+| `GET` | `/health` | Returns API status and triggers `STALE_FEED` warning if data lag exceeds 10 minutes. |
 
 ---
 
-## Event Schema
+## Running Automated Tests
 
-The pipeline emits standard, fully validated JSON events to the `/ingest` endpoint:
+Our test coverage exceeds the mandatory **70% acceptance gate** (currently **72.75%**).
 
-```json
-{
-  "event_id": "71a8f9c2-b5e4-4d9a-9b1c-3f2d1e4a5b6c",
-  "store_id": "STORE_BLR_002",
-  "camera_id": "CAM_ENTRY_01",
-  "visitor_id": "VIS_c8a2f1",
-  "event_type": "ZONE_DWELL",
-  "timestamp": "2026-03-03T14:22:10Z",
-  "zone_id": "SKINCARE",
-  "dwell_ms": 30000,
-  "is_staff": false,
-  "confidence": 0.82,
-  "metadata": {
-    "queue_depth": null,
-    "sku_zone": "MOISTURISER",
-    "session_seq": 5
-  }
-}
-```
-
----
-
-## Brand Spatial Calibration
-
-Layout mappings (`data/real_store_layout.json`) support dividing generic sections into brand-level sub-zones. For instance:
-* `SKINCARE` is segmented into sub-zones matching POS brand name strings (`Good Vibes`, `Minimalist`, `Foxtale`, `DERMDOC`, `COSRX`, `Round Lab`).
-* `MAKEUP` is segmented into brand sub-zones (`Alps Goodness`, `Swiss Beauty`, `Lakme`, `Faces Canada`, `Maybelline`, `NY Bae`).
-
-This calibration allows `/stores/{store_id}/metrics` to directly correlate visitors' spatial SKU visits to brand-specific transactions in the POS log.
-
----
-
-## Tests and Coverage
-
-Test suites run inside the consolidated container sandbox to ensure full compatibility.
-
-To run tests with code coverage metrics:
+Run the full pytest suite inside the container sandbox:
 ```bash
 docker compose run --rm api pytest
 ```
-
-The test coverage exceeds the **70% gate** (achieving **71.33%** coverage across the codebase) and covers:
-- Partial success and validation rejection.
-- Time-window metric isolation and conversion rates.
-- Funnel session-deduplication.
-- Anomaly alerts.
-- Live console dashboard rendering.
+Tests cover mock frame generation, staff uniform HSV classification, wide aspect-ratio bounding box group splitting, spatio-temporal Re-ID matching, and database index operations.

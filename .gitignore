@@ -17,3 +17,10 @@ Store 2-*/
 
 # Local runtime output
 store_intelligence.db
+
+# CCTV raw/testing video clips and visualization artifacts
+*.mp4
+*.jpg
+data/layout_viz/
+data/pos_transactions_docker.csv
+data/real_events.jsonl

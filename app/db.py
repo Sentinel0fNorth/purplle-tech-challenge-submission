@@ -1,7 +1,7 @@
 import sqlite3
 import os
 
-DB_PATH = os.getenv("DB_PATH", "retail.db")
+DB_PATH = os.getenv("DB_PATH") or os.getenv("STORE_INTEL_DB") or "retail.db"
 
 def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=10.0)

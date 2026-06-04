@@ -100,7 +100,7 @@ def run_yolo_video(
     layout = layouts[video.store_id]
     video_fps = probe_video_fps(video.path, fps)
     machine = RetailStateMachine(layout=layout, fps=video_fps)
-    staff = StaffClassifier(layout.staff_uniform_rgb)
+    staff = StaffClassifier(layout.staff_uniform_rgb, layout.staff_uniform_hsv)
     emitter = EventEmitter(api_url=api_url, jsonl_path=out, truncate=truncate_out)
     model = YOLO(model_name)
     emitted = 0
@@ -225,7 +225,7 @@ def run_motion_video(
     layout = layouts[video.store_id]
     video_fps = probe_video_fps(video.path, fps)
     machine = RetailStateMachine(layout=layout, fps=video_fps)
-    staff = StaffClassifier(layout.staff_uniform_rgb)
+    staff = StaffClassifier(layout.staff_uniform_rgb, layout.staff_uniform_hsv)
     emitter = EventEmitter(api_url=api_url, jsonl_path=out, truncate=truncate_out)
     cap = cv.VideoCapture(video.path)
     if not cap.isOpened():

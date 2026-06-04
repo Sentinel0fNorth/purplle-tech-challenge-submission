@@ -1,0 +1,35 @@
+# Ignore local python environments and caches
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Ignore Git files
+.git/
+.gitignore
+
+# Exclude original files, designs, and choices
+Original/
+Designs/
+Choices/
+../Original/
+../Designs/
+../Choices/
+
+# Exclude large data files, databases, and local video materials
+*.mp4
+*.avi
+*.mkv
+data/*.db
+data/store_intelligence.db
+data/Store 1/
+data/Store 2/
+data/real_events.jsonl
+data/generated_events.jsonl

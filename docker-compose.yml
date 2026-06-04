@@ -14,6 +14,7 @@ services:
       - ./pipeline:/app/pipeline:ro
       - ./tests:/app/tests:ro
       - ./scripts:/app/scripts:ro
+      - ../../Original:/workspace/Original:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 10s

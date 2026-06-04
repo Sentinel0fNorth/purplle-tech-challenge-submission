@@ -41,7 +41,7 @@ class EventEmitter:
     def flush(self) -> None:
         if not self.api_url or not self._batch:
             return
-        payload = json.dumps({"events": self._batch}).encode("utf-8")
+        payload = json.dumps(self._batch).encode("utf-8")
         req = urllib.request.Request(
             f"{self.api_url}/ingest",
             data=payload,

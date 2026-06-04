@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from .layout import StoreLayout, Zone, camera_for_id, sku_zone_for_bbox, zone_for_bbox
+from .layout import StoreLayout, Zone, camera_for_id, sku_zone_for_bbox, zone_for_bbox, foot_point, point_in_polygon
 from .reid import Embedding, blend_embedding, cosine_similarity
 
 
@@ -121,6 +121,18 @@ class RetailStateMachine:
             score = appearance_score
             score += self._transition_bonus(state, det.camera_id)
             score += self._time_bonus(elapsed)
+            
+            # Spatio-temporal constraint with frame-freeze override
+            if state.last_camera_track_key is not None:
+                prev_camera = state.last_camera_track_key.split(":", 1)[0]
+                if prev_camera != det.camera_id:
+                    # Shopper transitions between different cameras. Enforce travel constraint.
+                    if elapsed < 3.0:
+                        # If elapsed is too small, check if it's a freeze (very high appearance match)
+                        if appearance_score < 0.90:
+                            # Apply heavy penalty to prevent matching
+                            score -= 0.35
+            
             if score > best_score:
                 best_score = score
                 best_state = state
@@ -202,8 +214,17 @@ class RetailStateMachine:
 
     def _entry_line_y(self, det: Detection, zone: Zone | None) -> float | None:
         camera = camera_for_id(self.layout, det.camera_id)
-        if camera and camera.entry_line_y is not None:
-            return float(camera.entry_line_y)
+        if camera:
+            if camera.entry_line is not None:
+                p1, p2 = camera.entry_line
+                x1, y1 = p1
+                x2, y2 = p2
+                foot_x = (det.bbox[0] + det.bbox[2]) / 2.0
+                if abs(x2 - x1) < 1e-6:
+                    return (y1 + y2) / 2.0
+                return y1 + ((y2 - y1) / (x2 - x1)) * (foot_x - x1)
+            if camera.entry_line_y is not None:
+                return float(camera.entry_line_y)
         if zone and zone.zone_id == "ENTRY" and zone.polygon:
             ys = [point[1] for point in zone.polygon]
             return (min(ys) + max(ys)) / 2.0
@@ -224,7 +245,12 @@ class RetailStateMachine:
         if line_y is None:
             return None
         _, foot_y = ((det.bbox[0] + det.bbox[2]) / 2.0, det.bbox[3])
-        side = "inside" if foot_y >= line_y else "outside"
+        camera = camera_for_id(self.layout, det.camera_id)
+        side_op = camera.entry_line_side if camera else "below"
+        if side_op == "above":
+            side = "inside" if foot_y <= line_y else "outside"
+        else:
+            side = "inside" if foot_y >= line_y else "outside"
         state.entry_side_history.append(side)
         if len(state.entry_side_history) > self.line_confirm_frames:
             state.entry_side_history = state.entry_side_history[-self.line_confirm_frames :]
@@ -270,6 +296,38 @@ class RetailStateMachine:
         return events
 
     def process(self, detections: list[Detection]) -> list[dict[str, Any]]:
+        # Pre-process detections to split group entries near the entry threshold
+        split_detections: list[Detection] = []
+        for det in detections:
+            entry_zone = self._entry_zone_for_camera(det.camera_id)
+            w_box = det.bbox[2] - det.bbox[0]
+            h_box = det.bbox[3] - det.bbox[1]
+            aspect_ratio = w_box / h_box if h_box > 0 else 0
+            
+            # If in entry zone and aspect ratio is abnormally wide (group entry)
+            if entry_zone and aspect_ratio > 0.85 and point_in_polygon(foot_point(det.bbox), entry_zone.polygon):
+                num_people = max(2, int(round(w_box / (h_box * 0.45))))
+                slice_w = w_box / num_people
+                for i in range(num_people):
+                    vx1 = det.bbox[0] + i * slice_w
+                    vx2 = vx1 + slice_w
+                    vbbox = (vx1, det.bbox[1], vx2, det.bbox[3])
+                    split_detections.append(
+                        Detection(
+                            camera_id=det.camera_id,
+                            track_id=f"{det.track_id}_split_{i}",
+                            bbox=vbbox,
+                            confidence=det.confidence,
+                            frame_index=det.frame_index,
+                            timestamp=det.timestamp,
+                            is_staff=det.is_staff,
+                            embedding=det.embedding,
+                        )
+                    )
+            else:
+                split_detections.append(det)
+        detections = split_detections
+
         events: list[dict[str, Any]] = []
         active_billing: set[str] = set()
         group_size_by_camera: dict[str, int] = {}

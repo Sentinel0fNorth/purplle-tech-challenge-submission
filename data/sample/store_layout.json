@@ -4,6 +4,7 @@
       "store_id": "STORE_BLR_002",
       "open_hours": {"timezone": "Asia/Kolkata", "open": "10:00", "close": "22:00"},
       "staff_uniform_rgb": [[72, 62, 180], [48, 52, 160]],
+      "staff_uniform_hsv": [[103, 28, 55]],
       "cameras": [
         {"camera_id": "CAM_ENTRY_01", "role": "Entry/Exit threshold"},
         {"camera_id": "CAM_FLOOR_01", "role": "Main floor zone coverage"},

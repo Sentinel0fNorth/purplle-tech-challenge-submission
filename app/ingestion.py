@@ -1,7 +1,15 @@
 import sqlite3
 from typing import List, Tuple, Dict, Any
+from datetime import datetime, timezone
 from .models import EventPayload
 from .db import get_db
+
+def parse_timestamp(value: str) -> datetime:
+    value = value.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 def ingest_events(events: List[EventPayload]) -> Tuple[int, int, List[Dict[str, Any]]]:
     ingested = 0
@@ -11,17 +19,52 @@ def ingest_events(events: List[EventPayload]) -> Tuple[int, int, List[Dict[str, 
     with get_db() as conn:
         for event in events:
             try:
+                # Track Stitching logic
+                cursor = conn.execute(
+                    "SELECT stitched_visitor_id FROM stitched_visitors WHERE store_id = ? AND original_visitor_id = ?",
+                    (event.store_id, event.visitor_id)
+                )
+                row = cursor.fetchone()
+                if row:
+                    event.visitor_id = row["stitched_visitor_id"]
+                else:
+                    if event.event_type not in ("ENTRY", "REENTRY", "EXIT"):
+                        active_session = conn.execute(
+                            """
+                            SELECT visitor_id, entry_time FROM visitor_sessions
+                            WHERE store_id = ? AND is_staff = 0 AND (exit_time IS NULL OR exit_time = '') AND entry_time <= ?
+                            ORDER BY entry_time DESC LIMIT 1
+                            """,
+                            (event.store_id, event.timestamp)
+                        ).fetchone()
+                        
+                        if active_session:
+                            entry_dt = parse_timestamp(active_session["entry_time"])
+                            event_dt = parse_timestamp(event.timestamp)
+                            diff_seconds = (event_dt - entry_dt).total_seconds()
+                            if 0 <= diff_seconds <= 30.0:
+                                stitched_id = active_session["visitor_id"]
+                                conn.execute(
+                                    """
+                                    INSERT OR IGNORE INTO stitched_visitors (store_id, original_visitor_id, stitched_visitor_id)
+                                    VALUES (?, ?, ?)
+                                    """,
+                                    (event.store_id, event.visitor_id, stitched_id)
+                                )
+                                event.visitor_id = stitched_id
+
                 meta_json = event.metadata.model_dump_json()
                 cursor = conn.execute(
                     """
                     INSERT OR IGNORE INTO events 
-                    (event_id, store_id, camera_id, visitor_id, event_type, timestamp, zone_id, dwell_ms, is_staff, confidence, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (event_id, store_id, camera_id, visitor_id, event_type, timestamp, zone_id, dwell_ms, is_staff, confidence, metadata, queue_depth, sku_zone)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         event.event_id, event.store_id, event.camera_id, event.visitor_id, 
                         event.event_type, event.timestamp, event.zone_id, event.dwell_ms, 
-                        event.is_staff, event.confidence, meta_json
+                        event.is_staff, event.confidence, meta_json,
+                        event.metadata.queue_depth, event.metadata.sku_zone
                     )
                 )
                 

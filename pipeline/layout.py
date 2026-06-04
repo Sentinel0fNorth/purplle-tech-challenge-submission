@@ -34,6 +34,8 @@ class Camera:
     role: str
     video_path: str | None = None
     entry_line_y: float | None = None
+    entry_line: tuple[tuple[float, float], tuple[float, float]] | None = None
+    entry_line_side: str = "below"
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,7 @@ class StoreLayout:
     zones: tuple[Zone, ...]
     cameras: tuple[Camera, ...]
     staff_uniform_rgb: tuple[tuple[int, int, int], ...] = ()
+    staff_uniform_hsv: tuple[tuple[int, int, int], ...] = ()
 
 
 def _normalise_polygon(poly: Iterable[Any]) -> list[tuple[float, float]]:
@@ -75,16 +78,29 @@ def _parse_store(raw: dict[str, Any]) -> StoreLayout:
         )
     cameras = []
     for c in raw.get("cameras", []):
+        raw_line = c.get("entry_line")
+        entry_line = None
+        if raw_line is not None:
+            entry_line = ((float(raw_line[0][0]), float(raw_line[0][1])), (float(raw_line[1][0]), float(raw_line[1][1])))
         cameras.append(
             Camera(
                 camera_id=c.get("camera_id") or c.get("id"),
                 role=c.get("role", "unknown"),
                 video_path=c.get("video_path"),
                 entry_line_y=c.get("entry_line_y"),
+                entry_line=entry_line,
+                entry_line_side=c.get("entry_line_side", "below"),
             )
         )
     uniforms = tuple(tuple(map(int, rgb)) for rgb in raw.get("staff_uniform_rgb", []))
-    return StoreLayout(store_id=raw["store_id"], zones=tuple(zones), cameras=tuple(cameras), staff_uniform_rgb=uniforms)
+    uniforms_hsv = tuple(tuple(map(int, hsv)) for hsv in raw.get("staff_uniform_hsv", []))
+    return StoreLayout(
+        store_id=raw["store_id"],
+        zones=tuple(zones),
+        cameras=tuple(cameras),
+        staff_uniform_rgb=uniforms,
+        staff_uniform_hsv=uniforms_hsv,
+    )
 
 
 def load_layout(path: str | Path) -> dict[str, StoreLayout]:

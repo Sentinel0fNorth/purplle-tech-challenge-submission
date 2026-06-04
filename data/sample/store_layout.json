@@ -1,0 +1,30 @@
+{
+  "stores": [
+    {
+      "store_id": "STORE_BLR_002",
+      "open_hours": {"timezone": "Asia/Kolkata", "open": "10:00", "close": "22:00"},
+      "staff_uniform_rgb": [[72, 62, 180], [48, 52, 160]],
+      "cameras": [
+        {"camera_id": "CAM_ENTRY_01", "role": "Entry/Exit threshold"},
+        {"camera_id": "CAM_FLOOR_01", "role": "Main floor zone coverage"},
+        {"camera_id": "CAM_BILLING_01", "role": "Billing counter area"}
+      ],
+      "zones": [
+        {"zone_id": "ENTRY", "sku_zone": null, "camera_ids": ["CAM_ENTRY_01"], "polygon": [[760, 580], [1160, 580], [1240, 1080], [700, 1080]]},
+        {"zone_id": "SKINCARE", "sku_zone": "MOISTURISER", "camera_ids": ["CAM_FLOOR_01", "CAM_ENTRY_01"], "polygon": [[250, 320], [650, 320], [700, 820], [200, 820]]},
+        {
+          "zone_id": "MAKEUP",
+          "sku_zone": "Maybelline",
+          "camera_ids": ["CAM_FLOOR_01"],
+          "polygon": [[720, 320], [1120, 320], [1170, 820], [680, 820]],
+          "sku_subzones": [
+            {"sku_zone": "Maybelline", "polygon": [[680, 320], [850, 320], [860, 820], [680, 820]]},
+            {"sku_zone": "Faces Canada", "polygon": [[850, 320], [1010, 320], [1020, 820], [860, 820]]},
+            {"sku_zone": "Renee", "polygon": [[1010, 320], [1170, 320], [1170, 820], [1020, 820]]}
+          ]
+        },
+        {"zone_id": "BILLING", "sku_zone": "CHECKOUT", "camera_ids": ["CAM_BILLING_01", "CAM_ENTRY_01", "CAM_FLOOR_01"], "polygon": [[1180, 300], [1700, 300], [1760, 900], [1120, 900]]}
+      ]
+    }
+  ]
+}

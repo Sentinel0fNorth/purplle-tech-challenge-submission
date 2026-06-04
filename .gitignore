@@ -1,0 +1,19 @@
+.pytest_cache/
+__pycache__/
+*.pyc
+.coverage
+htmlcov/
+pytest-of-*/
+torchinductor_*/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local challenge archives and large generated media
+data/annotated/
+*.zip
+Store 1-*/
+Store 2-*/
+
+# Local runtime output
+store_intelligence.db

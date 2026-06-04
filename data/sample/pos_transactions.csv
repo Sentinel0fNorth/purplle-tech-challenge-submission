@@ -1,0 +1,3 @@
+store_id,transaction_id,timestamp,basket_value_inr
+STORE_BLR_002,TXN_00441,2026-03-03T14:01:10Z,1240.00
+STORE_BLR_002,TXN_00442,2026-03-03T14:15:55Z,680.00

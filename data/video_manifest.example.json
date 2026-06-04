@@ -1,0 +1,25 @@
+{
+  "videos": [
+    {
+      "store_id": "STORE_BLR_002",
+      "camera_id": "CAM_ENTRY_01",
+      "url": "PASTE_ENTRY_CAMERA_VIDEO_LINK_HERE",
+      "path": "data/raw/STORE_BLR_002/CAM_ENTRY_01.mp4",
+      "start_time": "2026-03-03T14:00:00Z"
+    },
+    {
+      "store_id": "STORE_BLR_002",
+      "camera_id": "CAM_FLOOR_01",
+      "url": "PASTE_MAIN_FLOOR_VIDEO_LINK_HERE",
+      "path": "data/raw/STORE_BLR_002/CAM_FLOOR_01.mp4",
+      "start_time": "2026-03-03T14:00:00Z"
+    },
+    {
+      "store_id": "STORE_BLR_002",
+      "camera_id": "CAM_BILLING_01",
+      "url": "PASTE_BILLING_VIDEO_LINK_HERE",
+      "path": "data/raw/STORE_BLR_002/CAM_BILLING_01.mp4",
+      "start_time": "2026-03-03T14:00:00Z"
+    }
+  ]
+}

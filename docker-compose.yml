@@ -1,0 +1,24 @@
+services:
+  api:
+    build: .
+    container_name: store-intelligence-api
+    ports:
+      - "8000:8000"
+    environment:
+      STORE_INTEL_DB: /data/store_intelligence.db
+      POS_CSV: /app/data/sample/pos_transactions.csv
+    volumes:
+      - store_intel_data:/data
+      - ./data:/app/data
+      - ./app:/app/app:ro
+      - ./pipeline:/app/pipeline:ro
+      - ./tests:/app/tests:ro
+      - ./scripts:/app/scripts:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  store_intel_data:
